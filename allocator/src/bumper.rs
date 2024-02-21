@@ -66,7 +66,7 @@ unsafe impl<const N: usize> GlobalAlloc for BumpAllocator<N> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let size = layout.size();
         let align = layout.align();
-        let mut start = 0;
+        let mut alloc_offset = 0;
 
         // Try to update allocated cursor
         if self
@@ -76,14 +76,14 @@ unsafe impl<const N: usize> GlobalAlloc for BumpAllocator<N> {
                     // Not enough bytes available
                     None
                 } else {
-                    let start_padding = (align - (allocated % align)) % align;
-                    start = allocated + start_padding;
+                    let alloc_padding = (align - (allocated % align)) % align;
+                    alloc_offset = allocated + alloc_padding;
 
-                    let allocation_end = start + size;
-                    if allocation_end <= N {
-                        Some(allocation_end)
+                    let alloc_end = alloc_offset + size;
+                    if alloc_end <= N {
+                        Some(alloc_end)
                     } else {
-                        // Padding caused the allocation to fail: not enough bytes available
+                        // Padding causes the allocation to fail: not enough bytes available
                         None
                     }
                 }
@@ -94,7 +94,7 @@ unsafe impl<const N: usize> GlobalAlloc for BumpAllocator<N> {
         }
 
         // Point to the start of the free bytes
-        self.arena.lock().unwrap().as_mut_ptr().add(start)
+        self.arena.lock().unwrap().as_mut_ptr().add(alloc_offset)
     }
 
     /// Deallocation of a single element.
