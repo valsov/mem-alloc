@@ -1,10 +1,10 @@
 use bumper::BumpAllocator;
 
 mod bumper;
-mod linked_list;
+mod free_list;
 
 fn main() {
-    let mut bump_allocator = BumpAllocator::<1024>::new();
+    let bump_allocator = BumpAllocator::<1024>::new();
     let a = bump_allocator.allocate(5);
     let test1 = bump_allocator.allocate(Test {
         test_a: 123,
