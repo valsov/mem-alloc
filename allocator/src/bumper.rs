@@ -1,23 +1,24 @@
 use std::{
     alloc::{GlobalAlloc, Layout},
-    cell::UnsafeCell,
     ptr::{self, null_mut},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    },
 };
 
-/// Issues:
-/// - bump() parameter is first allocated to the stack, not optimal
-/// - alignment is not taken into account for simplicity
+/// Issue(s):
+/// - bump() value parameter is first allocated to the stack, not optimal
 
 pub struct BumpAllocator<const N: usize> {
-    arena: UnsafeCell<[u8; N]>,
+    arena: Mutex<Box<[u8; N]>>,
     allocated: AtomicUsize,
 }
 
 impl<const N: usize> BumpAllocator<N> {
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
-            arena: UnsafeCell::new([0x0; N]),
+            arena: Mutex::new(Box::new([0x0; N])),
             allocated: AtomicUsize::new(0),
         }
     }
@@ -41,7 +42,8 @@ impl<const N: usize> BumpAllocator<N> {
 
 unsafe impl<const N: usize> GlobalAlloc for BumpAllocator<N> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let size: usize = layout.size();
+        let size = layout.size();
+        let align = layout.align();
         let mut start = 0;
 
         if self
@@ -50,8 +52,9 @@ unsafe impl<const N: usize> GlobalAlloc for BumpAllocator<N> {
                 if size > N - allocated {
                     None
                 } else {
-                    start = allocated;
-                    Some(allocated + size)
+                    let start_padding = (align - (allocated % align)) % align;
+                    start = allocated + start_padding;
+                    Some(start + size)
                 }
             })
             .is_err()
@@ -59,7 +62,7 @@ unsafe impl<const N: usize> GlobalAlloc for BumpAllocator<N> {
             return null_mut();
         }
 
-        self.arena.get().cast::<u8>().add(start)
+        self.arena.lock().unwrap().as_mut_ptr().add(start)
     }
 
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
