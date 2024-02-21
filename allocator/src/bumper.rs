@@ -78,7 +78,14 @@ unsafe impl<const N: usize> GlobalAlloc for BumpAllocator<N> {
                 } else {
                     let start_padding = (align - (allocated % align)) % align;
                     start = allocated + start_padding;
-                    Some(start + size)
+
+                    let allocation_end = start + size;
+                    if allocation_end <= N {
+                        Some(allocation_end)
+                    } else {
+                        // Padding caused the allocation to fail: not enough bytes available
+                        None
+                    }
                 }
             })
             .is_err()
