@@ -2,7 +2,7 @@ use once_cell::sync::Lazy;
 use std::{
     alloc::{GlobalAlloc, Layout},
     cell::UnsafeCell,
-    ptr::null_mut,
+    ptr::{self, null_mut},
     sync::Mutex,
 };
 
@@ -11,14 +11,32 @@ const ARENA_SIZE: usize = 128 * 1024;
 //#[global_allocator]
 //static ALLOCATOR: FreeListAllocator = FreeListAllocator::new();
 
+struct Node {
+    size: usize,
+    next_ptr: Option<*const u8>,
+}
+
+impl Node {
+    // Returns allocation padding
+    fn matches_requirements(&self, size: usize, align: usize, ptr: usize) -> Result<usize, ()> {
+        if size > self.size {
+            // Not enough bytes available
+            Err(())
+        } else {
+            let alloc_padding = (align - (ptr % align)) % align;
+            if ptr + alloc_padding + size <= self.size {
+                Ok(alloc_padding)
+            } else {
+                // Padding causes the allocation to fail: not enough bytes available
+                Err(())
+            }
+        }
+    }
+}
+
 struct AllocatorRoot {
     arena: UnsafeCell<[u8; ARENA_SIZE]>,
     free_root: Option<Node>,
-}
-
-struct Node {
-    size: usize,
-    next_ptr: Option<*mut u8>,
 }
 
 // Use Lazy to circumvent const function limitation -> can't set &mut variable inside (even if &'static), this defers it to first usage
@@ -48,7 +66,7 @@ impl FreeListAllocator {
 unsafe impl GlobalAlloc for FreeListAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let allocator = self.allocator.lock().unwrap();
-        let node = match &allocator.free_root {
+        let mut node = match &allocator.free_root {
             Some(n) => n,
             None => return null_mut(), // No memory available
         };
@@ -56,56 +74,26 @@ unsafe impl GlobalAlloc for FreeListAllocator {
         let size = layout.size();
         let align = layout.align();
 
-        // Iterate over free nodes until one matches size requirements
-        while let Some(node_ptr) = node.next_ptr {}
+        if let Ok(_padding) = node.matches_requirements(size, align, node as *const Node as usize) {
+            todo!("alloc and if padding -> maybe can add free node before -> remove current from free list")
+        }
 
-        todo!()
+        // Iterate over free nodes until one matches size requirements
+        let mut previous_node = node;
+        while let Some(node_ptr) = node.next_ptr {
+            node = unsafe { &*(node_ptr as *const Node) }; // Get Node at pointer
+            if let Ok(_padding) = node.matches_requirements(size, align, node_ptr as usize) {
+                todo!("alloc and if padding -> maybe can add free node before -> remove current from free list")
+            }
+
+            previous_node = node;
+        }
+
+        // Failed to find a suitable space
+        null_mut()
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         todo!()
     }
 }
-
-// Returns allocation padding
-fn matches_requirements(
-    available: usize,
-    size: usize,
-    align: usize,
-    ptr: usize,
-) -> Result<usize, ()> {
-    if size > available {
-        // Not enough bytes available
-        Err(())
-    } else {
-        let alloc_padding = (align - (ptr % align)) % align;
-        if ptr + alloc_padding + size <= available {
-            Ok(alloc_padding)
-        } else {
-            // Padding causes the allocation to fail: not enough bytes available
-            Err(())
-        }
-    }
-}
-
-/*
-if self
-    .allocated
-    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |allocated| {
-        if size > N - allocated {
-            // Not enough bytes available
-            None
-        } else {
-            let start_padding = (align - (allocated % align)) % align;
-            start = allocated + start_padding;
-            Some(start + size)
-        }
-    })
-    .is_err()
-{
-    return null_mut();
-}
-
-// Point to the start of the free bytes
-self.arena.lock().unwrap().as_mut_ptr().add(start)
-*/
