@@ -1,11 +1,8 @@
 use std::{
-    alloc::{GlobalAlloc, Layout},
+    alloc::{GlobalAlloc, Layout, System},
     mem::size_of,
     ptr::{self, null_mut},
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Mutex,
-    },
+    sync::atomic::{AtomicPtr, AtomicUsize, Ordering},
 };
 
 /// Heap allocator that simply places values after each other and isn't capable of single element deallocation.
@@ -13,15 +10,17 @@ use std::{
 /// This allocator is really fast and is able to deallocate all elements contained in it even faster.
 /// It supports memory wiping, writing 0 in each previously allocated byte.
 pub struct BumpAllocator<const N: usize> {
-    arena: Mutex<Box<[u8; N]>>,
+    arena_ptr: AtomicPtr<u8>,
     allocated: AtomicUsize,
 }
 
 impl<const N: usize> BumpAllocator<N> {
     /// Create a new instance of bump allocator, initialize the heap memory region for future allocations.
     pub fn new() -> Self {
+        let layout = Layout::new::<[u8; N]>();
+        let arena_ptr = unsafe { GlobalAlloc::alloc(&System, layout) };
         Self {
-            arena: Mutex::new(Box::new([0x0; N])),
+            arena_ptr: AtomicPtr::new(arena_ptr),
             allocated: AtomicUsize::new(0),
         }
     }
@@ -49,7 +48,7 @@ impl<const N: usize> BumpAllocator<N> {
     pub fn dealloc_all(&self, wipe_memory: bool) {
         if wipe_memory {
             // Write 0 in all allocated array space
-            let ptr = self.arena.lock().unwrap().as_mut_ptr();
+            let ptr = self.arena_ptr.load(Ordering::Acquire);
             let len_bytes = self.allocated.load(Ordering::SeqCst) * size_of::<u8>();
             unsafe {
                 ptr::write_bytes(ptr, 0, len_bytes);
@@ -94,7 +93,7 @@ unsafe impl<const N: usize> GlobalAlloc for BumpAllocator<N> {
         }
 
         // Point to the start of the free bytes
-        self.arena.lock().unwrap().as_mut_ptr().add(alloc_offset)
+        self.arena_ptr.load(Ordering::Acquire).add(alloc_offset)
     }
 
     /// Deallocation of a single element.
