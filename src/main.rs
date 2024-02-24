@@ -1,10 +1,9 @@
-use bumper::BumpAllocator;
-
 mod bumper;
 mod free_list;
 
 fn main() {
-    let bump_allocator = BumpAllocator::<1024>::new();
+    let test = Box::new(1115);
+    /*let bump_allocator = BumpAllocator::<1024>::new();
     let a = bump_allocator.allocate(5);
     let test1 = bump_allocator.allocate(Test {
         test_a: 123,
@@ -24,7 +23,7 @@ fn main() {
     });
 
     println!("{:?}", test1);
-    println!("{:?}", test2);
+    println!("{:?}", test2);*/
 }
 
 #[derive(Debug)]
