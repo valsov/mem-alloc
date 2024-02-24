@@ -13,7 +13,7 @@ const NODE_LAYOUT_SIZE: usize = Layout::new::<Node>().size();
 const USIZE_LAYOUT_SIZE: usize = Layout::new::<usize>().size();
 
 #[global_allocator]
-static ALLOCATOR: FreeListAllocator = FreeListAllocator::new();
+pub static ALLOCATOR: FreeListAllocator = FreeListAllocator::new();
 
 struct Node {
     size: usize,
@@ -27,9 +27,10 @@ impl Node {
             // Not enough bytes available
             Err(())
         } else {
-            let alloc_padding = compute_padding(align, ptr);
+            let alloc_padding = (align - (ptr % align)) % align;
             // [ PADDING | VALUE | PADDING_COUNT (usize) ]
             if alloc_padding + size + USIZE_LAYOUT_SIZE <= self.size {
+                // todo: should ensure there is enough space to fit a free_block (for dealloc)
                 Ok(alloc_padding)
             } else {
                 // Padding causes the allocation to fail: not enough bytes available
@@ -37,21 +38,21 @@ impl Node {
             }
         }
     }
+
+    // todo: uniformize Node size computations
 }
 
-// todo: implement iterator
 struct AllocatorRoot {
-    root_ptr: AtomicPtr<u8>,
     free_root: Option<AtomicPtr<u8>>,
 }
 
 // Use Lazy to circumvent const function limitation -> can't call ptr::write inside, this defers it to first usage
-struct FreeListAllocator {
+pub struct FreeListAllocator {
     allocator: Lazy<Mutex<AllocatorRoot>>,
 }
 
 impl FreeListAllocator {
-    const fn new() -> Self {
+    pub const fn new() -> Self {
         FreeListAllocator {
             allocator: Lazy::new(|| {
                 let layout = Layout::new::<[u8; ARENA_SIZE]>();
@@ -81,7 +82,6 @@ impl FreeListAllocator {
                 };
 
                 Mutex::new(AllocatorRoot {
-                    root_ptr: AtomicPtr::new(arena_ptr),
                     free_root: Some(AtomicPtr::new(arena_ptr)),
                 })
             }),
@@ -90,7 +90,7 @@ impl FreeListAllocator {
 }
 
 impl AllocatorRoot {
-    fn split_alloc(
+    unsafe fn split_alloc(
         &mut self,
         previous: Option<Node>,
         current: Node,
@@ -122,17 +122,18 @@ impl AllocatorRoot {
                 None
             };
 
-        let alloc_ptr = prev_node.next_ptr.unwrap().cast_mut();
+        // calculate allocation ptr (current block start + padding)
+        let alloc_ptr = prev_node.next_ptr.unwrap().cast_mut().add(padding);
 
         // Write padding count after value
-        unsafe { ptr::write(alloc_ptr.add(size + padding) as *mut usize, padding) }
+        ptr::write(alloc_ptr.add(size) as *mut usize, padding);
 
         // Add free node
         if let Some(mut node) = new_node {
             // Split the area into allocated and free
             node.next_ptr = current.next_ptr;
-            let new_free_ptr = unsafe {
-                let free_ptr = alloc_ptr.add(size + padding + USIZE_LAYOUT_SIZE);
+            let new_free_ptr = {
+                let free_ptr = alloc_ptr.add(size + USIZE_LAYOUT_SIZE);
                 ptr::write(free_ptr as *mut Node, node);
                 free_ptr as *const u8
             };
@@ -165,7 +166,7 @@ unsafe impl GlobalAlloc for FreeListAllocator {
         let align = layout.align();
 
         // Initial node
-        let mut node = unsafe { ptr::read(node_ptr.load(Ordering::Acquire) as *const Node) };
+        let mut node = ptr::read(node_ptr.load(Ordering::Acquire) as *const Node);
         if let Ok(padding) = node.matches_requirements(
             size,
             align,
@@ -177,7 +178,7 @@ unsafe impl GlobalAlloc for FreeListAllocator {
         // Iterate over free nodes until one matches size requirements
         let mut previous_node = node;
         while let Some(node_ptr) = previous_node.next_ptr {
-            node = unsafe { ptr::read(node_ptr as *const Node) };
+            node = ptr::read(node_ptr as *const Node);
             if let Ok(padding) = node.matches_requirements(size, align, *node_ptr as usize) {
                 // Allocate in place of the current free node
                 return allocator.split_alloc(Some(previous_node), node, size, padding);
@@ -191,10 +192,29 @@ unsafe impl GlobalAlloc for FreeListAllocator {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        todo!()
-    }
-}
+        // todo: handle fragmentation
 
-fn compute_padding(align: usize, ptr: usize) -> usize {
-    (align - (ptr % align)) % align
+        let mut allocator = self.allocator.lock().unwrap();
+
+        // Get start of block
+        let padding_ptr = ptr.add(layout.size());
+        let padding = ptr::read(padding_ptr as *mut usize);
+        let block_ptr = ptr.sub(padding);
+
+        // Get free root ptr
+        let root = allocator
+            .free_root
+            .as_ref()
+            .map(|root_ptr| root_ptr.load(Ordering::Acquire) as *const u8);
+
+        // Write free node
+        let node = Node {
+            size: padding + layout.size() + USIZE_LAYOUT_SIZE,
+            next_ptr: root,
+        };
+        ptr::write(block_ptr as *mut Node, node);
+
+        // Update free nodes root
+        allocator.free_root = Some(AtomicPtr::new(block_ptr));
+    }
 }
