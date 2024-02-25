@@ -16,6 +16,7 @@ pub struct BumpAllocator<const N: usize> {
 
 impl<const N: usize> BumpAllocator<N> {
     /// Create a new instance of bump allocator, initialize the heap memory region for future allocations.
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         let layout = Layout::new::<[u8; N]>();
         let arena_ptr = unsafe { GlobalAlloc::alloc(&System, layout) };
