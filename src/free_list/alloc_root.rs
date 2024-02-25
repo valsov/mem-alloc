@@ -1,11 +1,11 @@
-use super::node::{AllocationSpecs, Node, USIZE_LAYOUT_SIZE};
+use super::node::{AllocationMetadata, AllocationSpecs, Node, ALLOCATION_METADATA_LAYOUT_SIZE};
 use std::{
     ptr,
     sync::atomic::{AtomicPtr, Ordering},
 };
 
-pub struct AllocatorRoot {
-    pub free_root: Option<AtomicPtr<u8>>,
+pub(crate) struct AllocatorRoot {
+    pub(crate) free_root: Option<AtomicPtr<u8>>,
 }
 
 impl AllocatorRoot {
@@ -13,19 +13,19 @@ impl AllocatorRoot {
     /// If there is enough space left, add a new free Node with the remaining size.
     ///
     /// **Allocation possibilities**:
-    /// - | PAD . ALLOC . PAD_COUNT . FILL_PAD_COUNT . FILL_PAD |
-    /// - | PAD . ALLOC . PAD_COUNT . FILL_PAD_COUNT . FILL_PAD . FREE_NODE |
+    /// - | PAD . ALLOC . ALLOC_METADATA . FILL_PAD |
+    /// - | PAD . ALLOC . ALLOC_METADATA . FILL_PAD . FREE_NODE |
     ///
     /// **Blocks**:
     /// - PAD: padding to respect the value alignment requirements
     /// - ALLOC: space for the required value to be allocated
-    /// - PAD_COUNT: added padding count (usize), may be 0
-    /// - FILL_PAD_COUNT: additional padding count (usize), may be 0
+    /// - ALLOC_METADATA: struct containing references to allocation paddings
+    ///     - Added padding count (PAD size), may be 0
+    ///     - Additional padding count (FILL_PAD size), may be 0
     /// - FILL_PAD: additional padding after the allocated block to fill size up to a Node space
     /// (this is mandatory for deallocation process: must have enough space to allocate a free Block in place of this)
     /// - FREE_NODE: optional free Node instance if there is enough size to place it
-    // todo: use a struct for padding_count + fill_pad_count
-    pub unsafe fn split_alloc(
+    pub(crate) unsafe fn split_alloc(
         &mut self,
         previous: Option<Node>,
         current: Node,
@@ -60,17 +60,18 @@ impl AllocatorRoot {
             .cast_mut()
             .add(alloc_specs.padding);
 
-        // Write padding count and fill padding count after value
+        // Write allocation metadata after value
         let mut ptr_cursor = alloc_ptr.add(alloc_specs.size);
-        ptr::write(ptr_cursor as *mut usize, alloc_specs.padding);
-
-        ptr_cursor = ptr_cursor.add(USIZE_LAYOUT_SIZE);
-        ptr::write(ptr_cursor as *mut usize, alloc_specs.fill_padding);
+        let metadata = AllocationMetadata {
+            align_padding: alloc_specs.padding,
+            fill_padding: alloc_specs.fill_padding,
+        };
+        ptr::write(ptr_cursor as *mut AllocationMetadata, metadata);
 
         // Add free node
         if let Some(mut node) = new_node {
             // Split the area into allocated and free
-            ptr_cursor = ptr_cursor.add(USIZE_LAYOUT_SIZE + alloc_specs.fill_padding);
+            ptr_cursor = ptr_cursor.add(ALLOCATION_METADATA_LAYOUT_SIZE + alloc_specs.fill_padding);
             node.next_ptr = current.next_ptr;
             ptr::write(ptr_cursor as *mut Node, node); // Write Node
 
@@ -91,7 +92,7 @@ impl AllocatorRoot {
     }
 
     /// Create a new free block Node, trying to merge it with its adjacent Nodes.
-    pub unsafe fn create_node(&mut self, block_ptr: *mut u8, initial_size: usize) {
+    pub(crate) unsafe fn create_node(&mut self, block_ptr: *mut u8, initial_size: usize) {
         let root_ptr = if let Some(ptr) = &self.free_root {
             ptr.load(Ordering::Acquire)
         } else {

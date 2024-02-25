@@ -1,9 +1,10 @@
 use std::alloc::Layout;
 
-pub const NODE_LAYOUT_SIZE: usize = Layout::new::<Node>().size();
-pub const USIZE_LAYOUT_SIZE: usize = Layout::new::<usize>().size();
+pub(crate) const NODE_LAYOUT_SIZE: usize = Layout::new::<Node>().size();
+pub(crate) const ALLOCATION_METADATA_LAYOUT_SIZE: usize =
+    Layout::new::<AllocationMetadata>().size();
 
-pub struct Node {
+pub(crate) struct Node {
     pub next_ptr: Option<*const u8>,
     pub size: usize,
 }
@@ -23,7 +24,7 @@ impl Node {
         }
 
         let alloc_padding = (align - (ptr % align)) % align;
-        let alloc_size = alloc_padding + size + USIZE_LAYOUT_SIZE + USIZE_LAYOUT_SIZE;
+        let alloc_size = alloc_padding + size + ALLOCATION_METADATA_LAYOUT_SIZE;
 
         // Valid if padding + size + alloc metadata can fit inside
         // It also needs to be able to fit a Node once it's deallocated
@@ -55,7 +56,8 @@ impl Node {
     }
 }
 
-pub struct AllocationSpecs {
+/// Specifications of a new allocation. It contains all sizes required to allocate.
+pub(crate) struct AllocationSpecs {
     /// Allocation padding (to add before value)
     pub padding: usize,
     /// Size of the value to allocate
@@ -64,4 +66,10 @@ pub struct AllocationSpecs {
     pub fill_padding: usize,
     /// Remaining size if it can at least contain a Node
     pub remaining_size: usize,
+}
+
+/// Metadata added to each allocation in order to handle its deallocation.
+pub(crate) struct AllocationMetadata {
+    pub align_padding: usize,
+    pub fill_padding: usize,
 }

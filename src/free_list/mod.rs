@@ -1,4 +1,7 @@
-use self::{alloc_root::AllocatorRoot, node::USIZE_LAYOUT_SIZE};
+use self::{
+    alloc_root::AllocatorRoot,
+    node::{AllocationMetadata, ALLOCATION_METADATA_LAYOUT_SIZE},
+};
 use node::Node;
 use once_cell::sync::Lazy;
 use std::{
@@ -13,9 +16,20 @@ use std::{
 mod alloc_root;
 mod node;
 
-// Use Lazy to circumvent const function limitation -> can't call ptr::write inside, this defers it to first usage
+/// Free list allocator. It handles auto defragmentation on deallocation.
+/// The pool size is set using a generic type argument (see usage example).
+///
+/// ## Usage
+/// ```
+/// #[global_allocator]
+/// static ALLOCATOR: FreeListAllocator<1024> = FreeListAllocator::new();
+/// ```
+///
+/// ## Note
+/// Lazy is used to circumvent const function limitation, it allows a call to `ptr::write`.
+/// This defers the initialization to first allocation call.
 pub struct FreeListAllocator<const S: usize> {
-    pub allocator: Lazy<Mutex<AllocatorRoot>>,
+    allocator: Lazy<Mutex<AllocatorRoot>>,
 }
 
 impl<const S: usize> FreeListAllocator<S> {
@@ -83,22 +97,20 @@ unsafe impl<const S: usize> GlobalAlloc for FreeListAllocator<S> {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         let mut allocator = self.allocator.lock().unwrap();
 
+        // Get allocation metadata
+        let metadata = {
+            let metadata_ptr = ptr.add(layout.size());
+            ptr::read(metadata_ptr as *mut AllocationMetadata)
+        };
         // Get start of block
-        let padding = {
-            let padding_ptr = ptr.add(layout.size());
-            ptr::read(padding_ptr as *mut usize)
-        };
-        let block_ptr = ptr.sub(padding);
-
-        // Get fill padding
-        let fill_padding = {
-            let fill_padding_ptr = ptr.add(layout.size() + USIZE_LAYOUT_SIZE);
-            ptr::read(fill_padding_ptr as *mut usize)
-        };
+        let block_ptr = ptr.sub(metadata.align_padding);
 
         allocator.create_node(
             block_ptr,
-            padding + layout.size() + USIZE_LAYOUT_SIZE + USIZE_LAYOUT_SIZE + fill_padding,
+            metadata.align_padding
+                + layout.size()
+                + ALLOCATION_METADATA_LAYOUT_SIZE
+                + metadata.fill_padding,
         );
     }
 }
