@@ -23,7 +23,7 @@ impl AllocatorRoot {
     ///     - Added padding count (PAD size), may be 0
     ///     - Additional padding count (FILL_PAD size), may be 0
     /// - FILL_PAD: additional padding after the allocated block to fill size up to a Node space
-    /// (this is mandatory for deallocation process: must have enough space to allocate a free Block in place of this)
+    /// (this is mandatory for deallocation process: must have enough space to allocate a free Node in place of this)
     /// - FREE_NODE: optional free Node instance if there is enough size to place it
     pub(crate) unsafe fn split_alloc(
         &mut self,
