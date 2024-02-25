@@ -53,7 +53,7 @@ fn main() {
 	// Init
 	let bump = BumpAllocator::<2048>::new();
 	// Allocate a variable
-	let var_a = bump.allocate(123); // &mut usize
+	let var_a = bump.allocate(123); // &mut i32
 	
 	// Deallocate all allocated variables
 	// Use true as parameter value to write 0 at previously
