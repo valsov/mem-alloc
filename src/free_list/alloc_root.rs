@@ -1,80 +1,11 @@
-use once_cell::sync::Lazy;
+use super::node::{AllocationSpecs, Node, USIZE_LAYOUT_SIZE};
 use std::{
-    alloc::{GlobalAlloc, Layout, System},
-    ptr::{self, null_mut},
-    sync::{
-        atomic::{AtomicPtr, Ordering},
-        Mutex,
-    },
+    ptr,
+    sync::atomic::{AtomicPtr, Ordering},
 };
 
-const ARENA_SIZE: usize = 1024;
-const NODE_LAYOUT_SIZE: usize = Layout::new::<Node>().size();
-const USIZE_LAYOUT_SIZE: usize = Layout::new::<usize>().size();
-
-#[global_allocator]
-pub static ALLOCATOR: FreeListAllocator = FreeListAllocator::new();
-
-struct Node {
-    next_ptr: Option<*const u8>,
-    size: usize,
-}
-
-impl Node {
-    /// Check if the given parameters are suitable for an allocation in terms of available space.
-    ///
-    /// **Returns**:
-    /// - allocation padding (to add before value)
-    fn matches_requirements(&self, size: usize, align: usize, ptr: usize) -> Result<usize, ()> {
-        if size > self.size {
-            // Not enough bytes available
-            Err(())
-        } else {
-            let alloc_padding = (align - (ptr % align)) % align;
-
-            if alloc_padding + size + USIZE_LAYOUT_SIZE + USIZE_LAYOUT_SIZE <= self.size {
-                // Valid if padding + size + alloc metadata can fit inside
-                Ok(alloc_padding)
-            } else {
-                // Padding causes the allocation to fail: not enough bytes available
-                Err(())
-            }
-        }
-    }
-}
-
-struct AllocatorRoot {
-    free_root: Option<AtomicPtr<u8>>,
-}
-
-// Use Lazy to circumvent const function limitation -> can't call ptr::write inside, this defers it to first usage
-pub struct FreeListAllocator {
-    allocator: Lazy<Mutex<AllocatorRoot>>,
-}
-
-impl FreeListAllocator {
-    pub const fn new() -> Self {
-        FreeListAllocator {
-            allocator: Lazy::new(|| {
-                let layout = Layout::new::<[u8; ARENA_SIZE]>();
-                let arena_ptr = unsafe { GlobalAlloc::alloc(&System, layout) };
-
-                // Write root node at the start of the arena
-                let root_node = Node {
-                    size: ARENA_SIZE,
-                    next_ptr: None,
-                };
-
-                unsafe {
-                    ptr::write(arena_ptr as *mut Node, root_node);
-                };
-
-                Mutex::new(AllocatorRoot {
-                    free_root: Some(AtomicPtr::new(arena_ptr)),
-                })
-            }),
-        }
-    }
+pub struct AllocatorRoot {
+    pub free_root: Option<AtomicPtr<u8>>,
 }
 
 impl AllocatorRoot {
@@ -93,12 +24,12 @@ impl AllocatorRoot {
     /// - FILL_PAD: additional padding after the allocated block to fill size up to a Node space
     /// (this is mandatory for deallocation process: must have enough space to allocate a free Block in place of this)
     /// - FREE_NODE: optional free Node instance if there is enough size to place it
-    unsafe fn split_alloc(
+    // todo: use a struct for padding_count + fill_pad_count
+    pub unsafe fn split_alloc(
         &mut self,
         previous: Option<Node>,
         current: Node,
-        size: usize,
-        padding: usize,
+        alloc_specs: AllocationSpecs,
     ) -> *mut u8 {
         let is_root: bool;
         let mut prev_node = if let Some(prev) = previous {
@@ -113,43 +44,33 @@ impl AllocatorRoot {
             }
         };
 
-        // Compute sizes
-        let alloc_size = padding + size + USIZE_LAYOUT_SIZE + USIZE_LAYOUT_SIZE;
-        let fill_padding: usize; // Additional space needed to at least store a Node at deallocation
-        let new_node: Option<Node> = if current.size > alloc_size + NODE_LAYOUT_SIZE {
-            // Split the area into allocated and free
-            if NODE_LAYOUT_SIZE <= alloc_size {
-                fill_padding = 0;
-            } else {
-                fill_padding = NODE_LAYOUT_SIZE - alloc_size;
-            }
+        let new_node = if alloc_specs.remaining_size != 0 {
             Some(Node {
                 next_ptr: None, // Will be set later in the function
-                size: current.size - alloc_size - fill_padding,
+                size: alloc_specs.remaining_size,
             })
         } else {
-            if current.size <= alloc_size {
-                fill_padding = 0;
-            } else {
-                fill_padding = current.size - alloc_size;
-            }
             None
         };
 
         // calculate allocation ptr (current block start + padding)
-        let alloc_ptr = prev_node.next_ptr.unwrap().cast_mut().add(padding);
+        let alloc_ptr = prev_node
+            .next_ptr
+            .unwrap()
+            .cast_mut()
+            .add(alloc_specs.padding);
 
         // Write padding count and fill padding count after value
-        let mut ptr_cursor = alloc_ptr.add(size);
-        ptr::write(ptr_cursor as *mut usize, padding);
+        let mut ptr_cursor = alloc_ptr.add(alloc_specs.size);
+        ptr::write(ptr_cursor as *mut usize, alloc_specs.padding);
 
         ptr_cursor = ptr_cursor.add(USIZE_LAYOUT_SIZE);
-        ptr::write(ptr_cursor as *mut usize, fill_padding);
+        ptr::write(ptr_cursor as *mut usize, alloc_specs.fill_padding);
 
         // Add free node
         if let Some(mut node) = new_node {
             // Split the area into allocated and free
-            ptr_cursor = ptr_cursor.add(USIZE_LAYOUT_SIZE + fill_padding);
+            ptr_cursor = ptr_cursor.add(USIZE_LAYOUT_SIZE + alloc_specs.fill_padding);
             node.next_ptr = current.next_ptr;
             ptr::write(ptr_cursor as *mut Node, node); // Write Node
 
@@ -170,7 +91,7 @@ impl AllocatorRoot {
     }
 
     /// Create a new free block Node, trying to merge it with its adjacent Nodes.
-    unsafe fn create_node(&mut self, block_ptr: *mut u8, initial_size: usize) {
+    pub unsafe fn create_node(&mut self, block_ptr: *mut u8, initial_size: usize) {
         let root_ptr = if let Some(ptr) = &self.free_root {
             ptr.load(Ordering::Acquire)
         } else {
@@ -279,65 +200,5 @@ impl AllocatorRoot {
         }
 
         (node, new_ptr as *mut u8)
-    }
-}
-
-unsafe impl GlobalAlloc for FreeListAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let mut allocator = self.allocator.lock().unwrap();
-        let node_ptr = match &allocator.free_root {
-            Some(n) => n,
-            None => return null_mut(), // No memory available
-        };
-
-        let size = layout.size();
-        let align = layout.align();
-
-        // Initial node
-        let mut node = ptr::read(node_ptr.load(Ordering::Acquire) as *const Node);
-        if let Ok(padding) = node.matches_requirements(
-            size,
-            align,
-            node_ptr.load(Ordering::Acquire) as *const Node as usize,
-        ) {
-            return allocator.split_alloc(None, node, size, padding);
-        }
-
-        // Iterate over free nodes until one matches size requirements
-        let mut previous_node = node;
-        while let Some(node_ptr) = previous_node.next_ptr {
-            node = ptr::read(node_ptr as *const Node);
-            if let Ok(padding) = node.matches_requirements(size, align, *node_ptr as usize) {
-                // Allocate in place of the current free node
-                return allocator.split_alloc(Some(previous_node), node, size, padding);
-            }
-
-            previous_node = node;
-        }
-
-        // Failed to find a suitable space
-        null_mut()
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        let mut allocator = self.allocator.lock().unwrap();
-
-        // Get start of block
-        let padding = {
-            let padding_ptr = ptr.add(layout.size());
-            ptr::read(padding_ptr as *mut usize)
-        };
-        let block_ptr = ptr.sub(padding);
-
-        // Get fill padding
-        let fill_padding = {
-            let fill_padding_ptr = ptr.add(layout.size() + USIZE_LAYOUT_SIZE);
-            ptr::read(fill_padding_ptr as *mut usize)
-        };
-
-        allocator.create_node(
-            block_ptr,
-            padding + layout.size() + USIZE_LAYOUT_SIZE + USIZE_LAYOUT_SIZE + fill_padding,
-        );
     }
 }
