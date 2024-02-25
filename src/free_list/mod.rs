@@ -15,6 +15,8 @@ use std::{
 
 mod alloc_root;
 mod node;
+#[cfg(test)]
+mod tests;
 
 /// Free list allocator. It handles auto defragmentation on deallocation.
 /// The pool size is set using a generic type argument (see usage example).
@@ -70,11 +72,9 @@ unsafe impl<const S: usize> GlobalAlloc for FreeListAllocator<S> {
 
         // Initial node
         let mut node = ptr::read(node_ptr.load(Ordering::Acquire) as *const Node);
-        if let Ok(alloc_specs) = node.try_get_alloc_specs(
-            size,
-            align,
-            node_ptr.load(Ordering::Acquire) as *const Node as usize,
-        ) {
+        if let Ok(alloc_specs) =
+            node.try_get_alloc_specs(size, align, node_ptr.load(Ordering::Acquire))
+        {
             return allocator.split_alloc(None, node, alloc_specs);
         }
 
@@ -82,7 +82,7 @@ unsafe impl<const S: usize> GlobalAlloc for FreeListAllocator<S> {
         let mut previous_node = node;
         while let Some(node_ptr) = previous_node.next_ptr {
             node = ptr::read(node_ptr as *const Node);
-            if let Ok(alloc_specs) = node.try_get_alloc_specs(size, align, *node_ptr as usize) {
+            if let Ok(alloc_specs) = node.try_get_alloc_specs(size, align, node_ptr) {
                 // Allocate in place of the current free node
                 return allocator.split_alloc(Some(previous_node), node, alloc_specs);
             }

@@ -16,14 +16,14 @@ impl Node {
         &self,
         size: usize,
         align: usize,
-        ptr: usize,
+        ptr: *const u8,
     ) -> Result<AllocationSpecs, ()> {
         if size > self.size {
             // Fast out: not enough bytes available
             return Err(());
         }
 
-        let alloc_padding = (align - (ptr % align)) % align;
+        let alloc_padding = (align - (ptr as usize % align)) % align;
         let alloc_size = alloc_padding + size + ALLOCATION_METADATA_LAYOUT_SIZE;
 
         // Valid if padding + size + alloc metadata can fit inside
