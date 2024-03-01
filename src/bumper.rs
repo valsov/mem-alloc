@@ -47,10 +47,16 @@ impl<const N: usize> BumpAllocator<N> {
     ///
     /// * `wipe_memory`: Set to true to write 0 bytes where memory was allocated, false to leave the memory intact.
     pub fn dealloc_all(&self, wipe_memory: bool) {
+        let size = self.allocated.load(Ordering::Acquire);
+        if size == 0 {
+            // Nothing is currently allocated, can fast return
+            return;
+        }
+
         if wipe_memory {
             // Write 0 in all allocated array space
             let ptr = self.arena_ptr.load(Ordering::Acquire);
-            let len_bytes = self.allocated.load(Ordering::SeqCst) * size_of::<u8>();
+            let len_bytes = size * size_of::<u8>();
             unsafe {
                 ptr::write_bytes(ptr, 0, len_bytes);
             }
@@ -101,4 +107,68 @@ unsafe impl<const N: usize> GlobalAlloc for BumpAllocator<N> {
     ///
     /// No per-value deallocation, only full deallocation is available.
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
+}
+
+#[cfg(test)]
+mod test {
+    use crate::bumper::*;
+
+    #[test]
+    #[should_panic]
+    fn allocate_not_enough_space_panic() {
+        let bumper = BumpAllocator::<2>::new();
+        bumper.allocate(123); // i32 has layout size of 4 bytes, which is more than the available space (2 bytes)
+    }
+
+    #[test]
+    fn allocate_enough_space() {
+        let bumper = BumpAllocator::<4>::new();
+        let i32_var = bumper.allocate(123);
+
+        assert_eq!(*i32_var, 123);
+        let allocated = bumper.allocated.load(Ordering::Acquire);
+        assert_eq!(Layout::new::<i32>().size(), allocated)
+    }
+
+    #[test]
+    fn dealloc_all_empty_no_panic() {
+        let bumper = BumpAllocator::<8>::new();
+        bumper.dealloc_all(false);
+    }
+
+    #[test]
+    fn dealloc_all_wipe_memory_empty_no_panic() {
+        let bumper = BumpAllocator::<8>::new();
+        bumper.dealloc_all(true);
+    }
+
+    #[test]
+    fn dealloc_all() {
+        let bumper = BumpAllocator::<8>::new();
+        bumper.allocate(123);
+
+        bumper.dealloc_all(false);
+        let allocated = bumper.allocated.load(Ordering::Acquire);
+        assert_eq!(0, allocated); // Reset
+
+        // Bytes should still be set to the correct value, no wipe
+        let start_ptr = bumper.arena_ptr.load(Ordering::Acquire);
+        let stored_i32 = unsafe { ptr::read(start_ptr as *const i32) };
+        assert_eq!(123, stored_i32);
+    }
+
+    #[test]
+    fn dealloc_all_wipe_memory() {
+        let bumper = BumpAllocator::<8>::new();
+        bumper.allocate(123);
+
+        bumper.dealloc_all(true);
+        let allocated = bumper.allocated.load(Ordering::Acquire);
+        assert_eq!(0, allocated); // Reset
+
+        // Bytes should be set to 0
+        let start_ptr = bumper.arena_ptr.load(Ordering::Acquire);
+        let stored_i32 = unsafe { ptr::read(start_ptr as *const i32) };
+        assert_eq!(0, stored_i32);
+    }
 }
