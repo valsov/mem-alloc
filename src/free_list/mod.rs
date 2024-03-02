@@ -105,7 +105,7 @@ unsafe impl<const S: usize> GlobalAlloc for FreeListAllocator<S> {
         // Get start of block
         let block_ptr = ptr.sub(metadata.align_padding);
 
-        allocator.create_node(
+        allocator.create_free_node(
             block_ptr,
             metadata.align_padding
                 + layout.size()

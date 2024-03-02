@@ -92,7 +92,7 @@ impl AllocatorRoot {
     }
 
     /// Create a new free block Node, trying to merge it with its adjacent Nodes.
-    pub(crate) unsafe fn create_node(&mut self, block_ptr: *mut u8, initial_size: usize) {
+    pub(crate) unsafe fn create_free_node(&mut self, block_ptr: *mut u8, initial_size: usize) {
         let root_ptr = if let Some(ptr) = &self.free_root {
             ptr.load(Ordering::Acquire)
         } else {
@@ -130,7 +130,7 @@ impl AllocatorRoot {
     /// - Optional next Node pointer
     ///
     /// **Note**: returned pointer options can't be both None.
-    unsafe fn find_insertion_point(
+    pub(crate) unsafe fn find_insertion_point(
         &self,
         block_ptr: *const u8,
         root_ptr: *const u8,
@@ -165,8 +165,8 @@ impl AllocatorRoot {
     /// **Returns**:
     /// - Computed Node structure
     /// - Memory location to write the Node structure to
-    unsafe fn try_merge_nodes(
-        &mut self,
+    pub(crate) unsafe fn try_merge_nodes(
+        &self,
         block_ptr: *const u8,
         block_size: usize,
         previous_ptr: Option<*const u8>,

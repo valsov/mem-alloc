@@ -1,4 +1,4 @@
-use crate::free_list::node::{Node, ALLOCATION_METADATA_LAYOUT_SIZE, NODE_LAYOUT_SIZE};
+use crate::free_list::node::*;
 
 #[test]
 fn try_get_alloc_specs_not_enough_size() {
