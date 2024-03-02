@@ -1,8 +1,8 @@
 # Rust memory allocators
 
-This project features two memory allocators:
-- [Free list allocator](#free-list-allocator)
-- [Bump allocator](#bump-allocator)
+This project features two memory allocators, which are behind feature flags:
+- [Free list allocator](#free-list-allocator): `features = ["free_list"]`
+- [Bump allocator](#bump-allocator): `features = ["bump"]`
 
 ## Free list allocator
 
