@@ -12,6 +12,8 @@ impl AllocatorRoot {
     /// Allocate memory for the given size and alignment parameters, in place of an existing free Node.
     /// If there is enough space left, add a new free Node with the remaining size.
     ///
+    /// **Returns**: Pointer to the newly allocated block
+    ///
     /// **Allocation possibilities**:
     /// - | PAD . ALLOC . ALLOC_METADATA . FILL_PAD |
     /// - | PAD . ALLOC . ALLOC_METADATA . FILL_PAD . FREE_NODE |
