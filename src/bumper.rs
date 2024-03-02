@@ -122,12 +122,20 @@ mod test {
 
     #[test]
     fn allocate_enough_space() {
-        let bumper = BumpAllocator::<4>::new();
-        let i32_var = bumper.allocate(123);
+        let bumper = BumpAllocator::<8>::new();
 
+        let i32_var = bumper.allocate(123);
         assert_eq!(*i32_var, 123);
-        let allocated = bumper.allocated.load(Ordering::Acquire);
-        assert_eq!(Layout::new::<i32>().size(), allocated)
+        let mut allocated = bumper.allocated.load(Ordering::Acquire);
+        assert_eq!(Layout::new::<i32>().size(), allocated);
+
+        let bool_var = bumper.allocate(true);
+        assert!(*bool_var);
+        allocated = bumper.allocated.load(Ordering::Acquire);
+        assert_eq!(
+            Layout::new::<i32>().size() + Layout::new::<bool>().size(),
+            allocated
+        );
     }
 
     #[test]
